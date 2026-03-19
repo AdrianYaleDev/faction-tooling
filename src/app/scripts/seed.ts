@@ -2,46 +2,64 @@
 import { sql } from '../lib/db';
 import { User } from '../lib/definitions';
 
-async function seedUsers() {
+async function dropUserTable() {
+  try {
+    await sql`DROP TABLE IF EXISTS users CASCADE;`;
+    console.log('Dropped "users" table');
+  } catch (error) {
+    console.error('Error dropping users table:', error);
+    throw error;
+  }
+}
+
+async function createUserTable() {
   try {
     await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+
 
     await sql`
       CREATE TABLE IF NOT EXISTS users (
         id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
-		factionID VARCHAR(255) NULL,
-		tornID INT NOT NULL UNIQUE,
+		faction_id INT NULL,
+		torn_id INT NOT NULL UNIQUE,
+		api_key TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `;
 
     console.log(`Created "users" table`);
 
-    // 3. Optional: Insert a mock user to test the connection
-    const mockUser = {
-      name: 'Aiven Explorer',
-      factionID: null,
-      tornID: 123456,
-    };
-
-    const insertedUser = await sql<User[]>`
-      INSERT INTO users (name, factionID, tornID)
-      VALUES (${mockUser.name}, ${mockUser.factionID}, ${mockUser.tornID})
-      ON CONFLICT (tornID) DO NOTHING
-      RETURNING *;
-    `;
-
-    console.log(`Seeded ${insertedUser.length} user(s)`);
   } catch (error) {
     console.error('Error seeding users:', error);
     throw error;
   }
 }
 
+async function createFactionTable() {
+	try {
+		await sql`
+			CREATE TABLE IF NOT EXISTS factions (
+				faction_id INT PRIMARY KEY,
+				name VARCHAR(255) NOT NULL,
+				tag VARCHAR(10) NULL,
+				leader_id INT NOT NULL,
+				co_leader_id INT NULL,
+				last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			);
+		`;
+		console.log(`Created "Faction" Table`);
+	} catch (error) {
+		console.error('Error making Faction Table:', error);
+		throw error;
+  	}
+}
+
 async function main() {
   console.log('--- Starting Database Setup ---');
-  await seedUsers();
+  await dropUserTable();
+  await createUserTable();
+  await createFactionTable();
   // You can add seedPosts(), seedProducts(), etc., here later
   console.log('--- Database Setup Complete ---');
   process.exit(0);

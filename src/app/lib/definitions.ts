@@ -1,10 +1,16 @@
 // src/lib/definitions.ts
 
 export interface User {
-  id: string;       // Usually a UUID in Postgres
-  tornID: string,
-  name: string,
-  factionId: string,
-  createdAt: string,
-  apiKey: string
+  id: string;
+  name: string;
+  torn_id: number;
+  faction_id: number | null;
+  api_key: string; 
+  created_at: Date;
+}
+
+export interface Faction {
+	id: string;
+	name: string;
+	faction_id: number;
 }
