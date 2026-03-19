@@ -128,3 +128,24 @@ export async function loginWithTorn(formData: FormData) {
 
   redirect('/dashboard');
 }
+
+export async function getDashboardData(tornId: string) {
+  try {
+    const data = await sql`
+      SELECT 
+        u.name as "userName",
+        u.faction_id as "factionId",
+        f.name as "factionName",
+        f.tag as "factionTag",
+        f.leader_id as "leaderId"
+      FROM users u
+      LEFT JOIN factions f ON u.faction_id = f.faction_id
+      WHERE u.torn_id = ${parseInt(tornId)}
+      LIMIT 1
+    `;
+    return data[0];
+  } catch (error) {
+    console.error("Dashboard Fetch Error:", error);
+    return null;
+  }
+}
