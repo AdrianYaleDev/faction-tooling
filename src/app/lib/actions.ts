@@ -3,9 +3,11 @@
 import { sql } from './db';
 import { revalidatePath } from 'next/cache';
 import { User } from './definitions';
-import { encrypt } from './crypto';
+import { encrypt, decrypt } from './crypto';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { parseArmoryLog } from './parser';
+
 
 // Example: Fetching data
 export async function getUsers() {
@@ -45,6 +47,105 @@ export async function createUser(formData: FormData) {
   }
 }
 
+export async function syncArmoryLogs() {
+  const user = await sql`SELECT api_key, faction_id FROM users WHERE torn_id = 2978935 LIMIT 1`;
+  if (!user.length || !user[0].faction_id) return { error: "No faction config found" };
+
+  const apiKey = decrypt(user[0].api_key);
+  const factionId = user[0].faction_id;
+
+  const res = await fetch(`https://api.torn.com/faction/?selections=armorynews&key=${apiKey}`);
+  const data = await res.json();
+
+  if (data.error || !data.armorynews) {
+    console.error("Torn API Error:", data.error);
+    return;
+  }
+
+  const logs = Object.values(data.armorynews);
+
+  for (const logEntry of logs as any[]) {
+    const { tornId, action, item, plainText } = parseArmoryLog(logEntry.news);
+
+    if (tornId === 0) continue; // Skip logs we can't identify
+
+    await sql`
+      INSERT INTO armory_logs (
+        faction_id, 
+        torn_id, 
+        action_type, 
+        item_name, 
+        raw_text, 
+        log_timestamp
+      )
+      VALUES (
+        ${factionId}, 
+        ${tornId}, 
+        ${action}, 
+        ${item}, 
+        ${plainText}, 
+        ${logEntry.timestamp}
+      )
+      ON CONFLICT (faction_id, log_timestamp, raw_text) DO NOTHING
+    `;
+  }
+}
+
+export async function syncAllFactionLogs() {
+  // 1. Get all factions that have a system key
+  const factions = await sql`SELECT faction_id, api_key FROM factions WHERE api_key IS NOT NULL`;
+
+  for (const faction of factions) {
+    try {
+      const decryptedKey = decrypt(faction.api_key);
+      
+      const res = await fetch(
+        `https://api.torn.com/faction/?selections=armorynews&key=${decryptedKey}`,
+        { cache: 'no-store' }
+      );
+      const data = await res.json();
+
+      if (data.armorynews) {
+        const logs = Object.values(data.armorynews);
+        for (const logEntry of logs as any[]) {
+          const { tornId, action, item, quantity, plainText } = parseArmoryLog(logEntry.news);
+          
+          await sql`
+            INSERT INTO armory_logs (faction_id, torn_id, action_type, item_name, quantity, raw_text, log_timestamp)
+            VALUES (${faction.faction_id}, ${tornId}, ${action}, ${item}, ${quantity}, ${plainText}, ${logEntry.timestamp})
+            ON CONFLICT (faction_id, log_timestamp, raw_text) DO NOTHING
+          `;
+        }
+        console.log(`Synced logs for Faction ${faction.faction_id}`);
+      }
+    } catch (err) {
+      console.error(`Failed to sync faction ${faction.faction_id}:`, err);
+    }
+  }
+}
+
+export async function updateFactionApiKey(factionId: number, newKey: string) {
+  try {
+    const encryptedKey = encrypt(newKey);
+    
+    // Verify the key works before saving (Optional but recommended)
+    const check = await fetch(`https://api.torn.com/v2/faction/?selections=profile&key=${newKey}`);
+    const checkData = await check.json();
+    
+    if (checkData.error) throw new Error("Invalid API Key");
+
+    await sql`
+      UPDATE factions 
+      SET api_key = ${encryptedKey} 
+      WHERE faction_id = ${factionId}
+    `;
+    
+    return { success: true };
+  } catch (error) {
+    return { error: "Failed to update API key. Ensure it has Faction permissions." };
+  }
+}
+
 export async function loginWithTorn(formData: FormData) {
   const apiKey = formData.get('apiKey') as string;
 
@@ -72,15 +173,16 @@ export async function loginWithTorn(formData: FormData) {
       const f = facData.basic;
       // Use logical OR to check for ID or faction_id
       const actualFactionId = f.ID ?? f.id ?? factionId;
-
+		const encryptedKey = encrypt(apiKey);
       await sql`
-        INSERT INTO factions (faction_id, name, tag, leader_id, co_leader_id, last_updated)
+        INSERT INTO factions (faction_id, name, tag, leader_id, co_leader_id, last_updated, api_key)
         VALUES (
           ${actualFactionId}, 
           ${f.name ?? 'Unknown'}, 
           ${f.tag ?? null}, 
           ${f.leader_id ?? 0}, 
           ${f.co_leader_id ?? null}, 
+		  ${encryptedKey}
           CURRENT_TIMESTAMP
         )
         ON CONFLICT (faction_id) DO UPDATE SET

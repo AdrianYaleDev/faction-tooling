@@ -12,6 +12,16 @@ async function dropUserTable() {
   }
 }
 
+async function dropFactionTable() {
+  try {
+    await sql`DROP TABLE IF EXISTS factions CASCADE;`;
+    console.log('Dropped "factions" table');
+  } catch (error) {
+    console.error('Error dropping factions table:', error);
+    throw error;
+  }
+}
+
 async function createUserTable() {
   try {
     await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
@@ -45,6 +55,7 @@ async function createFactionTable() {
 				tag VARCHAR(10) NULL,
 				leader_id INT NOT NULL,
 				co_leader_id INT NULL,
+				api_key TEXT NULL,
 				last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 			);
 		`;
@@ -55,11 +66,36 @@ async function createFactionTable() {
   	}
 }
 
+async function createArmoryLogTable() {
+	try {
+		await sql `
+			CREATE TABLE IF NOT EXISTS armory_logs (
+				id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+				faction_id INT NOT NULL,
+				torn_id INT NOT NULL,
+				action_type VARCHAR(50),
+				item_name VARCHAR(255),
+				quantity INT DEFAULT 0,
+				raw_text TEXT not null,
+				log_timestamp INT NOT NULL,
+				created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(faction_id, log_timestamp, raw_text)
+			);	
+		`;
+
+	} catch (error) {
+		console.error("Error createing Logs Table:" , error);
+		throw error;
+	}
+}
+
 async function main() {
   console.log('--- Starting Database Setup ---');
   await dropUserTable();
   await createUserTable();
+  await dropFactionTable();
   await createFactionTable();
+  await createArmoryLogTable();
   // You can add seedPosts(), seedProducts(), etc., here later
   console.log('--- Database Setup Complete ---');
   process.exit(0);

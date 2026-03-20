@@ -11,3 +11,15 @@ export function encrypt(text: string) {
   encrypted = Buffer.concat([encrypted, cipher.final()]);
   return iv.toString('hex') + ':' + encrypted.toString('hex');
 }
+
+export function decrypt(text: string) {
+  const [ivPart, encryptedPart] = text.split(':');
+  if (!ivPart || !encryptedPart) return text; // Fallback if not encrypted
+
+  const iv = Buffer.from(ivPart, 'hex');
+  const encryptedText = Buffer.from(encryptedPart, 'hex');
+  const decipher = createDecipheriv(ALGORITHM, Buffer.from(KEY), iv);
+  let decrypted = decipher.update(encryptedText);
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+  return decrypted.toString();
+}
