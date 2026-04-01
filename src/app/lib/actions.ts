@@ -237,7 +237,7 @@ export async function loginWithTorn(formData: FormData) {
   redirect('/dashboard');
 }
 
-export async function getDashboardData(tornId: string) {
+export async function getDashboardData(tornId: string): Promise<DashboardUser | null> {
   try {
     const data = await sql<DashboardUser[]>`
       SELECT 
@@ -254,6 +254,6 @@ export async function getDashboardData(tornId: string) {
     return data[0];
   } catch (error) {
     console.error("Dashboard Fetch Error:", error);
-    return [null];
+    return null;
   }
 }

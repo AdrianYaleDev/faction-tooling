@@ -13,7 +13,7 @@ export default async function DashboardPage() {
   const user = await getDashboardData(sessionUser.value);
 
   if (!user) {
-    return <div className="p-10 text-red-500">Error: User data not found in database.</div>;
+    redirect('/');
   }
 
   return (
