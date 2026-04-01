@@ -2,7 +2,7 @@
 
 import { sql } from './db';
 import { revalidatePath } from 'next/cache';
-import { DashboardUser, User } from './definitions';
+import { ArmoryLog, DashboardUser, User } from './definitions';
 import { encrypt, decrypt } from './crypto';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
@@ -121,6 +121,183 @@ export async function syncAllFactionLogs() {
     } catch (err) {
       console.error(`Failed to sync faction ${faction.faction_id}:`, err);
     }
+  }
+}
+
+// Temporary manual sync for the currently logged-in user's faction.
+export async function runTempCurrentFactionArmorySyncAction(formData: FormData): Promise<void> {
+  try {
+    const cookieStore = await cookies();
+    const sessionUser = cookieStore.get('session_user_id');
+
+    if (!sessionUser) {
+      return;
+    }
+
+    const userRows = await sql<{ factionId: number | null }[]>`
+      SELECT faction_id as "factionId"
+      FROM users
+      WHERE torn_id = ${parseInt(sessionUser.value)}
+      LIMIT 1
+    `;
+
+    const factionId = userRows[0]?.factionId;
+
+    if (!factionId) {
+      return;
+    }
+
+    const factionRows = await sql<{ apiKey: string | null }[]>`
+      SELECT api_key as "apiKey"
+      FROM factions
+      WHERE faction_id = ${factionId}
+      LIMIT 1
+    `;
+
+    const encryptedApiKey = factionRows[0]?.apiKey;
+
+    if (!encryptedApiKey) {
+      return;
+    }
+
+    const startDate = formData.get('startDate') as string | null;
+    const endDate = formData.get('endDate') as string | null;
+    const defaultStartTimestamp = Math.floor(Date.now() / 1000) - (14 * 24 * 60 * 60);
+    const defaultEndTimestamp = Math.floor(Date.now() / 1000);
+
+    const requestedFromTimestamp = startDate
+      ? Math.floor(new Date(`${startDate}T00:00:00Z`).getTime() / 1000)
+      : defaultStartTimestamp;
+    const initialToTimestamp = endDate
+      ? Math.floor(new Date(`${endDate}T23:59:59Z`).getTime() / 1000)
+      : defaultEndTimestamp;
+
+    if (!Number.isFinite(requestedFromTimestamp) || !Number.isFinite(initialToTimestamp) || requestedFromTimestamp > initialToTimestamp) {
+      console.log(`[TempArmorySync] Abort reason=invalid-range from=${startDate} to=${endDate}`);
+      return;
+    }
+
+    const latestLocalRows = await sql<{ logTimestamp: number }[]>`
+      SELECT log_timestamp as "logTimestamp"
+      FROM armory_logs
+      WHERE faction_id = ${factionId}
+      ORDER BY log_timestamp DESC
+      LIMIT 1
+    `;
+
+    const latestLocalTimestamp = latestLocalRows[0]?.logTimestamp ?? null;
+    const isInitialBackfill = latestLocalTimestamp === null;
+    const fromTimestamp = isInitialBackfill
+      ? requestedFromTimestamp
+      : latestLocalTimestamp + 1;
+
+    if (fromTimestamp > initialToTimestamp) {
+      console.log(
+        `[TempArmorySync] Skip reason=already-up-to-date latestLocal=${latestLocalTimestamp} to=${initialToTimestamp}`,
+      );
+      revalidatePath('/dashboard/armory');
+      return;
+    }
+
+    const apiKey = decrypt(encryptedApiKey);
+    console.log(
+      `[TempArmorySync] Start faction=${factionId} user=${sessionUser.value} mode=${isInitialBackfill ? 'backfill' : 'incremental'} from=${fromTimestamp} to=${initialToTimestamp} latestLocal=${latestLocalTimestamp ?? 'none'}`,
+    );
+
+    let currentTo = initialToTimestamp;
+    const maxPages = 25;
+    let totalFetched = 0;
+    let totalInserted = 0;
+    let totalConflicts = 0;
+    let totalSkippedUnparsed = 0;
+
+    for (let page = 0; page < maxPages; page++) {
+      const pageUrl = `https://api.torn.com/faction/${factionId}?selections=armorynews&from=${fromTimestamp}&to=${currentTo}&key=${apiKey}`;
+
+      console.log(`[TempArmorySync] Fetch page=${page + 1} from=${fromTimestamp} to=${currentTo}`);
+
+      const res = await fetch(pageUrl, { cache: 'no-store' });
+      const data = await res.json();
+
+      if (!res.ok || data.error || !data.armorynews) {
+        console.log(
+          `[TempArmorySync] Stop page=${page + 1} reason=api-error status=${res.status} error=${JSON.stringify(data?.error ?? null)}`,
+        );
+        break;
+      }
+
+      const logs = Object.values(data.armorynews) as any[];
+      totalFetched += logs.length;
+
+      if (logs.length === 0) {
+        console.log(`[TempArmorySync] Stop page=${page + 1} reason=no-results`);
+        break;
+      }
+
+      let pageMaxTimestamp = 0;
+      let pageMinTimestamp: number | null = null;
+      let pageInserted = 0;
+      let pageConflicts = 0;
+      let pageSkippedUnparsed = 0;
+
+      for (const logEntry of logs) {
+        const { tornId, action, item, quantity, plainText } = parseArmoryLog(logEntry.news);
+
+        if (tornId === 0) {
+          pageSkippedUnparsed++;
+          totalSkippedUnparsed++;
+          continue;
+        }
+
+        const insertResult = await sql<{ id: string }[]>`
+          INSERT INTO armory_logs (faction_id, torn_id, action_type, item_name, quantity, raw_text, log_timestamp)
+          VALUES (${factionId}, ${tornId}, ${action}, ${item}, ${quantity ?? 0}, ${plainText}, ${logEntry.timestamp})
+          ON CONFLICT (faction_id, log_timestamp, raw_text) DO NOTHING
+          RETURNING id
+        `;
+
+        if (insertResult.length > 0) {
+          pageInserted += insertResult.length;
+          totalInserted += insertResult.length;
+        } else {
+          pageConflicts++;
+          totalConflicts++;
+        }
+
+        if (typeof logEntry.timestamp === 'number' && logEntry.timestamp > pageMaxTimestamp) {
+          pageMaxTimestamp = logEntry.timestamp;
+        }
+
+        if (typeof logEntry.timestamp === 'number') {
+          if (pageMinTimestamp === null || logEntry.timestamp < pageMinTimestamp) {
+            pageMinTimestamp = logEntry.timestamp;
+          }
+        }
+      }
+
+      console.log(
+        `[TempArmorySync] Page=${page + 1} fetched=${logs.length} inserted=${pageInserted} conflicts=${pageConflicts} skippedUnparsed=${pageSkippedUnparsed} minTs=${pageMinTimestamp ?? 'n/a'} maxTs=${pageMaxTimestamp}`,
+      );
+
+      if (pageMinTimestamp === null || pageMinTimestamp <= fromTimestamp) {
+        console.log(
+          `[TempArmorySync] Stop page=${page + 1} reason=range-exhausted from=${fromTimestamp} minTs=${pageMinTimestamp}`,
+        );
+        break;
+      }
+
+      currentTo = pageMinTimestamp - 1;
+    }
+
+    console.log(
+      `[TempArmorySync] Complete pages<=${maxPages} fetched=${totalFetched} inserted=${totalInserted} conflicts=${totalConflicts} skippedUnparsed=${totalSkippedUnparsed}`,
+    );
+
+    revalidatePath('/dashboard/armory');
+    return;
+  } catch (error) {
+    console.error('Temporary armory sync failed:', error);
+    return;
   }
 }
 
@@ -267,5 +444,77 @@ export async function getDashboardData(tornId: string): Promise<DashboardUser | 
   } catch (error) {
     console.error("Dashboard Fetch Error:", error);
     return null;
+  }
+}
+
+type ArmoryLogRange = {
+  startDate?: string;
+  endDate?: string;
+};
+
+export async function getCurrentFactionArmoryLogs(
+  limit = 200,
+  range?: ArmoryLogRange,
+): Promise<ArmoryLog[]> {
+  try {
+    const cookieStore = await cookies();
+    const sessionUser = cookieStore.get('session_user_id');
+
+    if (!sessionUser) {
+      return [];
+    }
+
+    const factionLookup = await sql<{ factionId: number | null }[]>`
+      SELECT faction_id as "factionId"
+      FROM users
+      WHERE torn_id = ${parseInt(sessionUser.value)}
+      LIMIT 1
+    `;
+
+    const factionId = factionLookup[0]?.factionId;
+
+    if (!factionId) {
+      return [];
+    }
+
+    const safeLimit = Math.max(1, Math.min(limit, 5000));
+
+    const hasStart = Boolean(range?.startDate);
+    const hasEnd = Boolean(range?.endDate);
+
+    const startTimestamp = hasStart
+      ? Math.floor(new Date(`${range!.startDate}T00:00:00Z`).getTime() / 1000)
+      : null;
+    const endTimestamp = hasEnd
+      ? Math.floor(new Date(`${range!.endDate}T23:59:59Z`).getTime() / 1000)
+      : null;
+
+    if ((hasStart && !Number.isFinite(startTimestamp)) || (hasEnd && !Number.isFinite(endTimestamp))) {
+      return [];
+    }
+
+    const logs = await sql<ArmoryLog[]>`
+      SELECT
+        al.id,
+        al.torn_id as "tornId",
+        u.name as "userName",
+        al.action_type as "actionType",
+        al.item_name as "itemName",
+        al.quantity,
+        al.raw_text as "rawText",
+        al.log_timestamp as "logTimestamp"
+      FROM armory_logs al
+      LEFT JOIN users u ON u.torn_id = al.torn_id
+      WHERE al.faction_id = ${factionId}
+        AND (${startTimestamp}::int IS NULL OR al.log_timestamp >= ${startTimestamp}::int)
+        AND (${endTimestamp}::int IS NULL OR al.log_timestamp <= ${endTimestamp}::int)
+      ORDER BY al.log_timestamp DESC
+      LIMIT ${safeLimit}
+    `;
+
+    return logs;
+  } catch (error) {
+    console.error('Armory Logs Fetch Error:', error);
+    return [];
   }
 }
