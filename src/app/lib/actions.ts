@@ -2,7 +2,7 @@
 
 import { sql } from './db';
 import { revalidatePath } from 'next/cache';
-import { User } from './definitions';
+import { DashboardUser, User } from './definitions';
 import { encrypt, decrypt } from './crypto';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
@@ -124,25 +124,31 @@ export async function syncAllFactionLogs() {
   }
 }
 
-export async function updateFactionApiKey(factionId: number, newKey: string) {
+export async function updateFactionApiKeyAction(prevState: any, formData: FormData) {
+  const factionId = formData.get('factionId') as string;
+  const newKey = formData.get('apiKey') as string;
+
+  if (!factionId || !newKey) {
+    return { error: "Missing required fields." };
+  }
+
   try {
     const encryptedKey = encrypt(newKey);
     
-    // Verify the key works before saving (Optional but recommended)
+    // Optional: Verify key with Torn before saving
     const check = await fetch(`https://api.torn.com/v2/faction/?selections=profile&key=${newKey}`);
-    const checkData = await check.json();
-    
-    if (checkData.error) throw new Error("Invalid API Key");
+    const data = await check.json();
+    if (data.error) return { error: "Invalid Torn API Key." };
 
     await sql`
       UPDATE factions 
       SET api_key = ${encryptedKey} 
-      WHERE faction_id = ${factionId}
+      WHERE faction_id = ${parseInt(factionId)}
     `;
     
-    return { success: true };
-  } catch (error) {
-    return { error: "Failed to update API key. Ensure it has Faction permissions." };
+    return { success: "System key updated successfully!" };
+  } catch (err) {
+    return { error: "Database error occurred." };
   }
 }
 
@@ -175,14 +181,14 @@ export async function loginWithTorn(formData: FormData) {
       const actualFactionId = f.ID ?? f.id ?? factionId;
 		const encryptedKey = encrypt(apiKey);
       await sql`
-        INSERT INTO factions (faction_id, name, tag, leader_id, co_leader_id, last_updated, api_key)
+        INSERT INTO factions (faction_id, name, tag, leader_id, co_leader_id, api_key, last_updated)
         VALUES (
           ${actualFactionId}, 
           ${f.name ?? 'Unknown'}, 
           ${f.tag ?? null}, 
           ${f.leader_id ?? 0}, 
           ${f.co_leader_id ?? null}, 
-		  ${encryptedKey}
+		  ${encryptedKey},
           CURRENT_TIMESTAMP
         )
         ON CONFLICT (faction_id) DO UPDATE SET
@@ -233,7 +239,7 @@ export async function loginWithTorn(formData: FormData) {
 
 export async function getDashboardData(tornId: string) {
   try {
-    const data = await sql`
+    const data = await sql<DashboardUser[]>`
       SELECT 
         u.name as "userName",
         u.faction_id as "factionId",
@@ -248,6 +254,6 @@ export async function getDashboardData(tornId: string) {
     return data[0];
   } catch (error) {
     console.error("Dashboard Fetch Error:", error);
-    return null;
+    return [null];
   }
 }

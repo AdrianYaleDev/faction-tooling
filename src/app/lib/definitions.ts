@@ -14,3 +14,12 @@ export interface Faction {
 	name: string;
 	faction_id: number;
 }
+
+export interface DashboardUser {
+  userName: string;
+  tornId: number;
+  factionId: number | null;
+  factionName: string | null;
+  factionTag: string | null;
+  leaderId: number | null;
+}
