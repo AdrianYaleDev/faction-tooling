@@ -128,17 +128,28 @@ export async function updateFactionApiKeyAction(prevState: any, formData: FormDa
   const factionId = formData.get('factionId') as string;
   const newKey = formData.get('apiKey') as string;
 
+  console.log(newKey);
+
   if (!factionId || !newKey) {
     return { error: "Missing required fields." };
   }
 
   try {
-    const encryptedKey = encrypt(newKey);
+    // Verify key with Torn before saving
+    const check = await fetch(`https://api.torn.com/faction/?selections=attacks&key=${newKey}`, {
+      cache: 'no-store',
+    });
     
-    // Optional: Verify key with Torn before saving
-    const check = await fetch(`https://api.torn.com/v2/faction/?selections=profile&key=${newKey}`);
     const data = await check.json();
-    if (data.error) return { error: "Invalid Torn API Key." };
+	console.log(data);
+    
+    // Check if response indicates an error
+    if (!check.ok || data.error) {
+      console.error("Torn API Error:", data);
+      return { error: "Invalid Torn API Key." };
+    }
+
+    const encryptedKey = encrypt(newKey);
 
     await sql`
       UPDATE factions 
@@ -148,6 +159,7 @@ export async function updateFactionApiKeyAction(prevState: any, formData: FormDa
     
     return { success: "System key updated successfully!" };
   } catch (err) {
+    console.error("updateFactionApiKeyAction Error:", err);
     return { error: "Database error occurred." };
   }
 }

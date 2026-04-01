@@ -29,6 +29,11 @@ export default async function DashboardPage() {
         description="Coming soon: Automated Organized Crime scheduling."
         disabled
       />
+	   <ToolCard
+        title="Settings"
+        description="Faction Settings."
+        href="/dashboard/settings"
+      />
     </DashboardTools>
   );
 }
