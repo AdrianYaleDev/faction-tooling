@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "src/app/api/cron/sync-logs",
+      "path": "/api/cron/sync-logs",
       "schedule": "0 * * * *" 
     }
   ]
