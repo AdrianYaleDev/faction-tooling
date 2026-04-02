@@ -301,6 +301,73 @@ export async function runTempCurrentFactionArmorySyncAction(formData: FormData):
   }
 }
 
+export async function syncMarketValues() {
+  try {
+    // 1. Get an API key to use. We can just grab the first valid user's api key 
+    const userResult = await sql`SELECT api_key FROM users WHERE api_key IS NOT NULL LIMIT 1`;
+    if (!userResult.length) {
+      console.error("No API key found to fetch market values.");
+      return;
+    }
+    const apiKey = decrypt(userResult[0].api_key);
+
+    // 2. Fetch the items from Torn API
+    const res = await fetch(`https://api.torn.com/torn/?selections=items&key=${apiKey}`, { cache: 'no-store' });
+    const data = await res.json();
+
+    if (data.error || !data.items) {
+      console.error("Torn API Error fetching items:", data.error);
+      return;
+    }
+
+    // 3. Upsert them into the items_market table
+    const items = data.items;
+    let updatedCount = 0;
+
+    for (const [idStr, item] of Object.entries(items)) {
+      const itemData = item as any;
+      const itemId = parseInt(idStr, 10);
+      
+      await sql`
+        INSERT INTO items_market (
+          item_id, 
+          name, 
+          description, 
+          type, 
+          market_value, 
+          buy_price, 
+          sell_price,
+          last_updated
+        )
+        VALUES (
+          ${itemId}, 
+          ${itemData.name}, 
+          ${itemData.description}, 
+          ${itemData.type}, 
+          ${itemData.market_value}, 
+          ${itemData.buy_price}, 
+          ${itemData.sell_price},
+          CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (item_id) DO UPDATE SET
+          name = EXCLUDED.name,
+          description = EXCLUDED.description,
+          type = EXCLUDED.type,
+          market_value = EXCLUDED.market_value,
+          buy_price = EXCLUDED.buy_price,
+          sell_price = EXCLUDED.sell_price,
+          last_updated = EXCLUDED.last_updated
+      `;
+      updatedCount++;
+    }
+
+    console.log(`Successfully synced ${updatedCount} items to market values table.`);
+    revalidatePath('/dashboard/armory');
+  } catch (err) {
+    console.error("Failed to sync market values:", err);
+  }
+}
+
 export async function updateFactionApiKeyAction(prevState: any, formData: FormData) {
   const factionId = formData.get('factionId') as string;
   const newKey = formData.get('apiKey') as string;

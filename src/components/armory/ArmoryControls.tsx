@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { runTempCurrentFactionArmorySyncAction } from '../../app/lib/actions';
+import { runTempCurrentFactionArmorySyncAction, syncMarketValues } from '../../app/lib/actions';
 
 type ArmoryControlsProps = {
   activeView: 'items' | 'users';
@@ -21,16 +21,26 @@ export default function ArmoryControls({ activeView, startDate, endDate, title, 
           <h2 className="text-2xl font-bold text-blue-400">{title}</h2>
           <p className="text-sm text-gray-400 mt-1">{description}</p>
         </div>
-        <form action={runTempCurrentFactionArmorySyncAction}>
-          <input type="hidden" name="startDate" value={startDate} />
-          <input type="hidden" name="endDate" value={endDate} />
-          <button
-            type="submit"
-            className="bg-amber-600 hover:bg-amber-700 text-white font-semibold px-4 py-2 rounded-lg"
-          >
-            Temporary: Sync Faction Logs
-          </button>
-        </form>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <form action={runTempCurrentFactionArmorySyncAction}>
+            <input type="hidden" name="startDate" value={startDate} />
+            <input type="hidden" name="endDate" value={endDate} />
+            <button
+              type="submit"
+              className="bg-amber-600 hover:bg-amber-700 text-white font-semibold px-4 py-2 rounded-lg"
+            >
+              Temporary: Sync Faction Logs
+            </button>
+          </form>
+          <form action={syncMarketValues}>
+            <button
+              type="submit"
+              className="bg-purple-600 hover:bg-purple-700 text-white font-semibold px-4 py-2 rounded-lg"
+            >
+              Sync Item Market Values
+            </button>
+          </form>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2">

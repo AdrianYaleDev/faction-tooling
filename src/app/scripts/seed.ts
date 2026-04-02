@@ -89,13 +89,35 @@ async function createArmoryLogTable() {
 	}
 }
 
+async function createItemsMarketTable() {
+	try {
+		await sql`
+			CREATE TABLE IF NOT EXISTS items_market (
+				item_id INT PRIMARY KEY,
+				name VARCHAR(255) NOT NULL,
+				description TEXT,
+				type VARCHAR(100),
+				market_value BIGINT NOT NULL DEFAULT 0,
+				buy_price BIGINT NOT NULL DEFAULT 0,
+				sell_price BIGINT NOT NULL DEFAULT 0,
+				last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+			);
+		`;
+		console.log(`Created "items_market" Table`);
+	} catch (error) {
+		console.error("Error creating Items Market Table:", error);
+		throw error;
+	}
+}
+
 async function main() {
   console.log('--- Starting Database Setup ---');
-  await dropUserTable();
+//   await dropUserTable();
   await createUserTable();
-  await dropFactionTable();
+//   await dropFactionTable();
   await createFactionTable();
   await createArmoryLogTable();
+  await createItemsMarketTable();
   // You can add seedPosts(), seedProducts(), etc., here later
   console.log('--- Database Setup Complete ---');
   process.exit(0);
